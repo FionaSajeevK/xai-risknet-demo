@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meppadi Landslide Alert (prototype)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body{margin:0 auto;max-width:720px;font-family:"Nirmala UI",system-ui,sans-serif;background:#f4f4f4}
+  #proto{background:#b71c1c;color:#fff;font-size:12px;padding:4px 10px;text-align:center}
+  #card{padding:18px 14px;color:#fff;text-align:center;transition:background .3s}
+  #hello{font-size:15px;margin:0 0 4px;opacity:.95}
+  #title{font-size:32px;font-weight:800;margin:0}
+  #msg{font-size:19px;line-height:1.35;margin:10px 0 0}
+  .row{display:flex;gap:8px;padding:10px;flex-wrap:wrap}
+  button{font-size:16px;padding:10px 14px;border:0;border-radius:8px;background:#1565c0;color:#fff;cursor:pointer}
+  button.alt{background:#555}
+  #tap{padding:0 14px 4px;font-size:14px;color:#333}
+  #map{height:56vh}
+  #routeinfo{padding:10px 14px;font-size:18px;font-weight:600}
+  #legend{display:flex;flex-wrap:wrap;gap:6px 14px;padding:6px 14px;font-size:13px;color:#333}
+  #legend i{display:inline-block;width:14px;height:14px;margin-right:5px;vertical-align:-2px;border-radius:3px}
+  .pin{font-size:30px;line-height:30px;text-align:center}
+  .leaflet-tooltip.big{font-size:13px;font-weight:700}
+  details{padding:10px 14px;font-size:14px}
+  details button{margin:3px;font-size:14px;background:#777}
+</style>
+</head>
+<body>
+<div id="proto">PROTOTYPE - sample data, not an official alert</div>
+<div id="card"><p id="hello"></p><p id="title">-</p><p id="msg"></p></div>
+<div class="row"><button id="locbtn"></button><button id="langbtn" class="alt"></button></div>
+<div id="tap"></div>
+<div id="map"></div>
+<div id="routeinfo"></div>
+<div id="legend"></div>
+<details>
+  <summary>Demo controls (presentation only)</summary>
+  <p>In the real system rainfall comes from live data. Residents never see this.</p>
+  <button data-a="5" data-b="40">Dry day</button>
+  <button data-a="80" data-b="180">Heavy</button>
+  <button data-a="130" data-b="320">Very heavy</button>
+  <button data-a="230" data-b="400">Extreme</button>
+  <br><button id="send">Send alert to my phone</button>
+  <pre id="sendres"></pre>
+</details>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const NAME = {en: 'Arun', ml: 'അരുൺ'};
+const T = {
+  en: {
+    hello: n => `Hello, ${n}`,
+    title: ["SAFE", "BE READY", "WARNING", "LEAVE NOW"],
+    msg: ["No danger right now. Stay informed.",
+          "Heavy rain expected. Be ready: charge your phone and stay away from steep slopes and streams.",
+          "Landslide warning. Keep away from slopes and river banks. Be ready to leave.",
+          "Danger! Leave now and go to the nearest relief camp. Follow the green line on the map."],
+    loc: "📍 Use my location", tap: "Demo: uses Arun's saved home. Or tap the map to mark another spot.",
+    other: "മലയാളം",
+    route: (n, km, who) => `${who ? who + ', go' : 'Go'} to ${n}, about ${km} km. Follow the green line.`,
+    shelter: "the nearest relief camp",
+    homeLabel: n => `${n} (home - demo location)`, you: "You",
+    outside: "This spot is outside the demo area. Tap inside the blue boundary.",
+    noroute: "No route found from here.",
+    legend: [["#0d47a1", "Meppadi boundary"], ["#f9a825", "Moderate-risk slope"],
+             ["#ef6c00", "High-risk slope"], ["#c62828", "Very-high-risk slope"], ["#1b5e20", "Safe route"]]
+  },
+  ml: {
+    hello: n => `നമസ്കാരം, ${n}`,
+    title: ["സുരക്ഷിതം", "തയ്യാറായിരിക്കുക", "മുന്നറിയിപ്പ്", "ഉടൻ ഒഴിഞ്ഞുപോകുക"],
+    msg: ["ഇപ്പോൾ അപകടമില്ല. വിവരങ്ങൾ ശ്രദ്ധിക്കുക.",
+          "ശക്തമായ മഴയ്ക്ക് സാധ്യത. തയ്യാറായിരിക്കുക. ഫോൺ ചാർജ് ചെയ്തു വയ്ക്കുക. ചരിവുകളിലും തോടുകളുടെ അരികിലും പോകരുത്.",
+          "ഉരുൾപൊട്ടൽ മുന്നറിയിപ്പ്. ചരിവുകളിൽ നിന്നും പുഴയോരത്തുനിന്നും മാറി നിൽക്കുക. ഒഴിഞ്ഞുപോകാൻ തയ്യാറായിരിക്കുക.",
+          "അപകടം! ഉടൻ ഒഴിഞ്ഞുപോകുക. അടുത്തുള്ള ക്യാമ്പിലേക്ക് പോകുക. മാപ്പിലെ പച്ച വരയിലൂടെ പോകുക."],
+    loc: "📍 എന്റെ സ്ഥലം ഉപയോഗിക്കുക", tap: "ഡെമോ: അരുണിന്റെ വീടാണ് ഉപയോഗിക്കുന്നത്. മറ്റൊരു സ്ഥലം മാപ്പിൽ തൊട്ടും നൽകാം.",
+    other: "English",
+    route: (n, km, who) => `${who ? who + ', ' : ''}${n} ലേക്ക് പോകുക, ഏകദേശം ${km} കിലോമീറ്റർ. പച്ച വരയിലൂടെ പോകുക.`,
+    shelter: "അടുത്തുള്ള ക്യാമ്പ്",
+    homeLabel: n => `${n} (വീട് - ഡെമോ സ്ഥലം)`, you: "നിങ്ങൾ",
+    outside: "ഈ സ്ഥലം ഡെമോ പ്രദേശത്തിന് പുറത്താണ്. നീല അതിർത്തിക്കുള്ളിൽ തൊടുക.",
+    noroute: "ഇവിടെ നിന്ന് വഴി കണ്ടെത്താനായില്ല.",
+    legend: [["#0d47a1", "മേപ്പാടി അതിർത്തി"], ["#f9a825", "ഇടത്തരം അപകട സാധ്യതയുള്ള ചരിവ്"],
+             ["#ef6c00", "ഉയർന്ന അപകട സാധ്യതയുള്ള ചരിവ്"], ["#c62828", "വളരെ ഉയർന്ന അപകട സാധ്യതയുള്ള ചരിവ്"],
+             ["#1b5e20", "സുരക്ഷിത വഴി"]]
+  }
+};
+const COL = ['#2e7d32', '#f9a825', '#ef6c00', '#c62828'];
+const ZCOL = {2: '#f9a825', 3: '#ef6c00', 4: '#c62828'};
+const OPAC = [0.25, 0.35, 0.5, 0.65];
+const $ = id => document.getElementById(id);
+let lang = 'en', level = 0, rain = {a: 5, b: 40}, area, zonesLayer;
+let origin, originIsHome = false, marker, campMarker, routeLayers = [], lastRoute;
+
+const map = L.map('map', {preferCanvas: true}).setView([11.55, 76.13], 11);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution: '&copy; OpenStreetMap contributors', maxZoom: 19}).addTo(map);
+
+const pinIcon = ch => L.divIcon({html: ch, className: 'pin', iconSize: [30, 30], iconAnchor: [15, 30]});
+const tip = {permanent: true, direction: 'right', offset: [10, -15], className: 'big'};
+const pinLabel = () => originIsHome ? T[lang].homeLabel(NAME[lang]) : T[lang].you;
+
+function render() {
+  const t = T[lang];
+  $('card').style.background = COL[level];
+  $('hello').textContent = t.hello(NAME[lang]);
+  $('title').textContent = t.title[level];
+  $('msg').textContent = t.msg[level];
+  $('locbtn').textContent = t.loc; $('langbtn').textContent = t.other;
+  $('tap').textContent = t.tap;
+  $('legend').innerHTML = t.legend.map(([c, l]) => `<span><i style="background:${c}"></i>${l}</span>`).join('');
+  if (marker) marker.setTooltipContent(pinLabel());
+  if (lastRoute) {
+    const nm = lastRoute.shelter.name || t.shelter;
+    $('routeinfo').textContent = t.route(nm, (lastRoute.safest.length_m / 1000).toFixed(1),
+                                         originIsHome ? NAME[lang] : '');
+    if (campMarker) campMarker.setTooltipContent(nm);
+  }
+}
+function styleZones() {
+  if (zonesLayer) zonesLayer.setStyle(f => ({color: ZCOL[f.properties.cls], weight: 1,
+    fillColor: ZCOL[f.properties.cls], fillOpacity: OPAC[level]}));
+}
+async function setScenario(a, b) {
+  rain = {a, b};
+  const s = await (await fetch(`/api/status?rain24=${a}&rain15=${b}`)).json();
+  level = s.level; area = L.latLngBounds(s.bounds);
+  styleZones(); render();
+  if (origin) route(false);
+}
+async function route(fit) {
+  const r = await (await fetch(`/api/route?lat=${origin.lat}&lon=${origin.lng}&rain24=${rain.a}&rain15=${rain.b}`)).json();
+  routeLayers.forEach(l => map.removeLayer(l)); routeLayers = [];
+  if (campMarker) { map.removeLayer(campMarker); campMarker = null; }
+  if (r.error) { lastRoute = null; $('routeinfo').textContent = T[lang].noroute; return; }
+  lastRoute = r;
+  const pts = r.safest.coords.map(c => [c[1], c[0]]);
+  const camp = [r.shelter.lat, r.shelter.lon];
+  if (!pts.length) pts.push(camp);
+  routeLayers.push(
+    L.polyline(pts, {color: '#1b5e20', weight: 6}).addTo(map),
+    L.polyline([origin, pts[0]], {color: '#1b5e20', weight: 3, dashArray: '4 6'}).addTo(map),
+    L.polyline([pts[pts.length - 1], camp], {color: '#1b5e20', weight: 3, dashArray: '4 6'}).addTo(map));
+  campMarker = L.marker(camp, {icon: pinIcon('⛺')}).addTo(map).bindTooltip('', tip);
+  render();
+  if (fit) map.fitBounds(L.latLngBounds([origin, ...pts, camp]), {padding: [40, 40]});
+}
+function place(ll, home) {
+  if (area && !area.contains(ll)) { $('routeinfo').textContent = T[lang].outside; return; }
+  origin = ll; originIsHome = !!home;
+  if (marker) map.removeLayer(marker);
+  marker = L.marker(ll, {icon: pinIcon('📍')}).addTo(map).bindTooltip(pinLabel(), tip);
+  route(true);
+}
+function addMask(g) {
+  const world = [[-90, -180], [-90, 180], [90, 180], [90, -180]];
+  const holes = [];
+  g.features.forEach(f => {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    polys.forEach(p => holes.push(p[0].map(c => [c[1], c[0]])));
+  });
+  L.polygon([world, ...holes], {stroke: false, fillColor: '#000', fillOpacity: 0.35, interactive: false}).addTo(map);
+}
+
+map.on('click', e => place(e.latlng, false));
+$('locbtn').onclick = async () => {
+  const h = await (await fetch('/api/home')).json();
+  place(L.latLng(h.lat, h.lon), true);
+};
+$('langbtn').onclick = () => { lang = lang === 'en' ? 'ml' : 'en'; render(); };
+document.querySelectorAll('button[data-a]').forEach(b =>
+  b.onclick = () => setScenario(+b.dataset.a, +b.dataset.b));
+$('send').onclick = async () => {
+  const res = await (await fetch('/api/alert', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({rain24: rain.a, rain15: rain.b})})).json();
+  $('sendres').textContent = res.log ? res.log.mode : res.message;
+};
+
+(async () => {
+  await setScenario(5, 40);
+  map.fitBounds(area);
+  const z = await (await fetch('/api/zones')).json();
+  zonesLayer = L.geoJSON(z, {onEachFeature: (f, l) => l.bindTooltip(f.properties.name)}).addTo(map);
+  styleZones();
+  fetch('/api/boundary').then(r => r.json()).then(g => {
+    addMask(g);
+    L.geoJSON(g, {style: {color: '#0d47a1', weight: 3, fillOpacity: 0}, interactive: false}).addTo(map);
+  });
+  fetch('/api/shelters').then(r => r.json()).then(g =>
+    L.geoJSON(g, {pointToLayer: (f, ll) => L.circleMarker(ll, {radius: 5, color: '#4a148c', fillOpacity: 1})
+      .bindTooltip((f.properties.name || 'Shelter') + ' (candidate)')}).addTo(map));
+})();
+</script>
+</body>
+</html>

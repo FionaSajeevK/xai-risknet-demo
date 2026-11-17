@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XAI-RiskNet - Prototype</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
+  #banner{background:#b71c1c;color:#fff;padding:6px 12px;font-size:13px}
+  #app{flex:1;display:flex;min-height:0}
+  #map{flex:1}
+  aside{width:360px;padding:12px;overflow:auto;border-left:1px solid #ccc;font-size:14px}
+  input[type=range]{width:100%}
+  button{margin:2px;padding:6px 10px;cursor:pointer}
+  #level{padding:10px;color:#fff;font-weight:600;border-radius:6px;margin:10px 0;text-align:center}
+  pre{background:#f4f4f4;padding:8px;font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto}
+</style>
+</head>
+<body>
+<div id="banner">PROTOTYPE - risk layer is a slope-based placeholder driven by sample rainfall, not the trained model</div>
+<div id="app">
+  <div id="map"></div>
+  <aside>
+    <h3>Rainfall scenario (sample inputs)</h3>
+    <div>
+      <button data-a="5" data-b="40">Dry day</button>
+      <button data-a="80" data-b="180">Heavy</button>
+      <button data-a="130" data-b="320">Very heavy</button>
+      <button data-a="230" data-b="400">Extreme</button>
+    </div>
+    <label>24 h rainfall: <b id="v24">5</b> mm</label>
+    <input id="r24" type="range" min="0" max="350" value="5">
+    <label>15-day rainfall: <b id="v15">40</b> mm</label>
+    <input id="r15" type="range" min="0" max="600" value="40">
+    <div id="level">-</div>
+    <button id="send">Send demo alert (simulated)</button>
+    <p>Click the map to place a resident. Blue dashed = shortest route, green = safest route.</p>
+    <div id="routeinfo"></div>
+    <h4>CAP message</h4><pre id="cap">-</pre>
+    <h4>Dispatch log</h4><pre id="log">-</pre>
+  </aside>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const COLORS = ["#2e7d32", "#f9a825", "#ef6c00", "#c62828"];
+const map = L.map('map', {preferCanvas: true}).setView([11.55, 76.13], 11);  // replaced by fitBounds below
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution: '&copy; OpenStreetMap contributors', maxZoom: 19}).addTo(map);
+const $ = id => document.getElementById(id);
+let overlay, origin, originMarker, routeLayers = [];
+const q = () => `rain24=${$('r24').value}&rain15=${$('r15').value}`;
+
+   const ZCOL = {2: '#f9a825', 3: '#ef6c00', 4: '#c62828'};
+   const OPAC = [0.25, 0.35, 0.5, 0.65];
+   let zones;
+   async function loadZones() {
+     const g = await (await fetch('/api/zones')).json();
+     zones = L.geoJSON(g, {style: {weight: 1}, onEachFeature: (f, l) => l.bindTooltip(f.properties.name)}).addTo(map);
+   }
+async function refresh(first = false) {
+  $('v24').textContent = $('r24').value; $('v15').textContent = $('r15').value;
+  const s = await (await fetch('/api/status?' + q())).json();
+  $('level').textContent = s.name; $('level').style.background = COLORS[s.level];
+    if (!zones) await loadZones();
+    zones.setStyle(f => ({color: ZCOL[f.properties.cls], weight: 1, fillColor: ZCOL[f.properties.cls], fillOpacity: OPAC[s.level]}));
+  if (first) map.fitBounds(s.bounds);
+  if (origin) route();
+}
+
+async function route() {
+  const r = await (await fetch(`/api/route?lat=${origin.lat}&lon=${origin.lng}&${q()}`)).json();
+  routeLayers.forEach(l => map.removeLayer(l)); routeLayers = [];
+  if (r.error) { $('routeinfo').innerText = r.error; return; }
+  const draw = (p, color, dash) => routeLayers.push(
+    L.polyline(p.coords.map(c => [c[1], c[0]]), {color, weight: 5, dashArray: dash}).addTo(map));
+  draw(r.shortest, '#1565c0', '8 8'); draw(r.safest, '#2e7d32');
+  $('routeinfo').innerText =
+    `Shelter: ${r.shelter.name} (${r.shelter.type})\n` +
+    `Shortest: ${r.shortest.length_m} m, mean risk ${r.shortest.mean_risk}\n` +
+    `Safest: ${r.safest.length_m} m, mean risk ${r.safest.mean_risk}`;
+}
+
+map.on('click', e => {
+  origin = e.latlng;
+  if (originMarker) map.removeLayer(originMarker);
+  originMarker = L.circleMarker(origin, {radius: 8, color: '#000'}).addTo(map);
+  route();
+});
+['r24', 'r15'].forEach(id => {
+  $(id).addEventListener('input', () => { $('v24').textContent = $('r24').value; $('v15').textContent = $('r15').value; });
+  $(id).addEventListener('change', () => refresh());
+});
+document.querySelectorAll('button[data-a]').forEach(b => b.onclick = () => {
+  $('r24').value = b.dataset.a; $('r15').value = b.dataset.b; refresh();
+});
+$('send').onclick = async () => {
+  const res = await (await fetch('/api/alert', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({rain24: +$('r24').value, rain15: +$('r15').value})})).json();
+  $('cap').textContent = res.cap || res.message;
+  $('log').textContent = res.log ? JSON.stringify(res.log, null, 2) : '-';
+};
+fetch('/api/boundary').then(r => r.json()).then(g =>
+  L.geoJSON(g, {style: {color: '#000', weight: 2, fillOpacity: 0}}).addTo(map));
+fetch('/api/shelters').then(r => r.json()).then(g =>
+  L.geoJSON(g, {pointToLayer: (f, ll) => L.circleMarker(ll, {radius: 6, color: '#4a148c', fillOpacity: 1})
+    .bindTooltip((f.properties.name || 'Shelter') + ' (candidate)')}).addTo(map));
+refresh(true);
+</script>
+</body>
+</html>
